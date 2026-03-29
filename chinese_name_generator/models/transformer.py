@@ -1,7 +1,8 @@
 """
 Transformer 模型
 
-基于标准 Transformer Encoder 架构实现的字符级语言模型
+基于标准 Transformer Encoder 架构实现的语言模型
+支持字符级分词和 BPE 分词
 用于中文人名生成任务
 """
 
@@ -231,7 +232,8 @@ class TransformerModel(nn.Module):
         d_ff: int = 512,
         max_len: int = 20,
         dropout: float = 0.1,
-        pad_idx: int = 0
+        pad_idx: int = 0,
+        tokenizer_type: str = 'char'
     ):
         """
         初始化 Transformer 模型
@@ -245,11 +247,13 @@ class TransformerModel(nn.Module):
             max_len: 最大序列长度
             dropout: Dropout 比例
             pad_idx: PAD token 的索引
+            tokenizer_type: 分词器类型，'char' 为字符级，'bpe' 为 BPE 分词
         """
         super().__init__()
         
         self.d_model = d_model
         self.pad_idx = pad_idx
+        self.tokenizer_type = tokenizer_type
         
         # 嵌入层
         self.embedding = nn.Embedding(vocab_size, d_model, padding_idx=pad_idx)

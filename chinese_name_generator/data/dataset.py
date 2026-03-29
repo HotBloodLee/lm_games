@@ -2,13 +2,21 @@
 数据集类
 
 实现 PyTorch Dataset 接口，用于加载和预处理人名数据
+支持字符级分词（Vocabulary）和 BPE 分词（BPETokenizer）
 """
 
 import torch
 from torch.utils.data import Dataset, DataLoader
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
 from pathlib import Path
 from .vocabulary import Vocabulary
+
+try:
+    from .bpe_tokenizer import BPETokenizer
+    BPE_AVAILABLE = True
+except ImportError:
+    BPETokenizer = None
+    BPE_AVAILABLE = False
 
 
 class NameDataset(Dataset):
@@ -16,12 +24,13 @@ class NameDataset(Dataset):
     人名数据集类
     
     将人名转换为模型可用的张量格式
+    支持字符级分词（Vocabulary）和 BPE 分词（BPETokenizer）
     """
     
     def __init__(
         self,
         names: List[str],
-        vocab: Vocabulary,
+        tokenizer: Union[Vocabulary, 'BPETokenizer'],
         max_length: Optional[int] = None
     ):
         """
@@ -29,11 +38,14 @@ class NameDataset(Dataset):
         
         Args:
             names: 人名列表
-            vocab: 词表实例
+            tokenizer: 分词器实例（Vocabulary 或 BPETokenizer）
             max_length: 最大序列长度（包含 BOS 和 EOS），None 表示使用数据中的最大长度
         """
         self.names = names
-        self.vocab = vocab
+        self.tokenizer = tokenizer
+        
+        # 检测分词器类型
+        self.is_bpe = BPE_AVAILABLE and isinstance(tokenizer, BPETokenizer)
         
         # 计算最大长度（+2 是为了 BOS 和 EOS）
         if max_length is None:
@@ -42,7 +54,15 @@ class NameDataset(Dataset):
             self.max_length = max_length
         
         # 预处理：编码所有人名
-        self.encoded_names = [vocab.encode(name) for name in names]
+        if self.is_bpe:
+            # BPE 分词器
+            self.encoded_names = [
+                tokenizer.encode(name, add_special_tokens=True) 
+                for name in names
+            ]
+        else:
+            # 字符级分词器
+            self.encoded_names = [tokenizer.encode(name) for name in names]
     
     def __len__(self) -> int:
         """数据集大小"""
@@ -57,15 +77,15 @@ class NameDataset(Dataset):
         
         Returns:
             (input_ids, target_ids) 元组
-            - input_ids: 输入序列 [BOS, char1, char2, ..., PAD, ...]
-            - target_ids: 目标序列 [char1, char2, ..., EOS, PAD, ...]
+            - input_ids: 输入序列 [BOS, token1, token2, ..., PAD, ...]
+            - target_ids: 目标序列 [token1, token2, ..., EOS, PAD, ...]
         """
         encoded = self.encoded_names[idx]
         
-        # 输入：BOS + 字符序列（不含 EOS）
+        # 输入：BOS + token 序列（不含 EOS）
         input_ids = encoded[:-1]  # 移除 EOS
         
-        # 目标：字符序列 + EOS（不含 BOS）
+        # 目标：token 序列 + EOS（不含 BOS）
         target_ids = encoded[1:]  # 移除 BOS
         
         # 填充到最大长度
@@ -90,7 +110,14 @@ class NameDataset(Dataset):
         """
         if len(seq) >= max_len:
             return seq[:max_len]
-        return seq + [self.vocab.pad_idx] * (max_len - len(seq))
+        
+        # 获取 PAD 索引
+        if self.is_bpe:
+            pad_idx = self.tokenizer.pad_idx
+        else:
+            pad_idx = self.tokenizer.pad_idx
+        
+        return seq + [pad_idx] * (max_len - len(seq))
     
     def get_raw_name(self, idx: int) -> str:
         """获取原始人名"""
@@ -114,7 +141,7 @@ def load_names_from_file(file_path: str) -> List[str]:
 
 def create_data_loaders(
     names: List[str],
-    vocab: Vocabulary,
+    tokenizer: Union[Vocabulary, 'BPETokenizer'],
     batch_size: int = 64,
     train_ratio: float = 0.9,
     max_length: Optional[int] = None,
@@ -127,7 +154,7 @@ def create_data_loaders(
     
     Args:
         names: 人名列表
-        vocab: 词表实例
+        tokenizer: 分词器实例（Vocabulary 或 BPETokenizer）
         batch_size: 批次大小
         train_ratio: 训练集比例
         max_length: 最大序列长度
@@ -144,8 +171,8 @@ def create_data_loaders(
     val_names = names[split_idx:]
     
     # 创建数据集
-    train_dataset = NameDataset(train_names, vocab, max_length)
-    val_dataset = NameDataset(val_names, vocab, max_length)
+    train_dataset = NameDataset(train_names, tokenizer, max_length)
+    val_dataset = NameDataset(val_names, tokenizer, max_length)
     
     # 创建数据加载器
     train_loader = DataLoader(
@@ -173,12 +200,13 @@ class NameDatasetForGeneration(Dataset):
     用于生成任务的数据集
     
     提供前缀（姓氏或部分字符）作为输入
+    支持字符级分词和 BPE 分词
     """
     
     def __init__(
         self,
         names: List[str],
-        vocab: Vocabulary,
+        tokenizer: Union[Vocabulary, 'BPETokenizer'],
         prefix_length: int = 1
     ):
         """
@@ -186,12 +214,13 @@ class NameDatasetForGeneration(Dataset):
         
         Args:
             names: 人名列表
-            vocab: 词表实例
+            tokenizer: 分词器实例（Vocabulary 或 BPETokenizer）
             prefix_length: 前缀长度（用于条件生成）
         """
         self.names = names
-        self.vocab = vocab
+        self.tokenizer = tokenizer
         self.prefix_length = prefix_length
+        self.is_bpe = BPE_AVAILABLE and isinstance(tokenizer, BPETokenizer)
     
     def __len__(self) -> int:
         return len(self.names)
@@ -205,7 +234,14 @@ class NameDatasetForGeneration(Dataset):
         """
         name = self.names[idx]
         prefix = name[:self.prefix_length]
-        prefix_ids = self.vocab.encode(prefix, add_bos=True, add_eos=False)
+        
+        if self.is_bpe:
+            # BPE 分词器：只添加 BOS，不添加 EOS
+            prefix_ids = self.tokenizer.encode(prefix, add_special_tokens=False)
+            prefix_ids = [self.tokenizer.bos_idx] + prefix_ids
+        else:
+            # 字符级分词器
+            prefix_ids = self.tokenizer.encode(prefix, add_bos=True, add_eos=False)
         
         return torch.tensor(prefix_ids, dtype=torch.long), name
 

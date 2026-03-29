@@ -1,7 +1,8 @@
 """
 GPT 模型
 
-基于 GPT (Decoder-only) 架构实现的字符级语言模型
+基于 GPT (Decoder-only) 架构实现的语言模型
+支持字符级分词和 BPE 分词
 使用因果注意力掩码实现自回归生成
 """
 
@@ -183,7 +184,8 @@ class GPTModel(nn.Module):
         d_ff: int = 512,
         max_len: int = 20,
         dropout: float = 0.1,
-        pad_idx: int = 0
+        pad_idx: int = 0,
+        tokenizer_type: str = 'char'
     ):
         """
         初始化 GPT 模型
@@ -197,12 +199,14 @@ class GPTModel(nn.Module):
             max_len: 最大序列长度
             dropout: Dropout 比例
             pad_idx: PAD token 的索引
+            tokenizer_type: 分词器类型，'char' 为字符级，'bpe' 为 BPE 分词
         """
         super().__init__()
         
         self.d_model = d_model
         self.pad_idx = pad_idx
         self.max_len = max_len
+        self.tokenizer_type = tokenizer_type
         
         # Token 嵌入
         self.token_embedding = nn.Embedding(vocab_size, d_model, padding_idx=pad_idx)

@@ -3,8 +3,15 @@
 GPT 模型训练脚本
 
 使用方法:
+    # 字符级分词（默认）
     python scripts/train_gpt.py --epochs 100 --device auto
     python scripts/train_gpt.py --epochs 50 --device cuda --batch_size 128
+    
+    # BPE 分词
+    python scripts/train_gpt.py --tokenizer bpe --bpe_vocab_size 500 --epochs 100
+    python scripts/train_gpt.py --tokenizer bpe --bpe_tokenizer_path checkpoints/bpe_tokenizer.json
+    
+    # 自定义数据
     python scripts/train_gpt.py --device mps --data_path data/custom_names.txt
 """
 
@@ -20,6 +27,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from data.vocabulary import Vocabulary
+from data.bpe_tokenizer import BPETokenizer
 from data.dataset import load_names_from_file, create_data_loaders
 from models.gpt import GPTModel
 from trainers.trainer import Trainer
@@ -49,6 +57,25 @@ def parse_args():
         type=str,
         default="data/names.txt",
         help="人名数据文件路径"
+    )
+    parser.add_argument(
+        "--tokenizer",
+        type=str,
+        default="char",
+        choices=["char", "bpe"],
+        help="分词器类型: 'char' 为字符级分词，'bpe' 为 BPE 分词"
+    )
+    parser.add_argument(
+        "--bpe_tokenizer_path",
+        type=str,
+        default="checkpoints/bpe_tokenizer.json",
+        help="BPE 分词器路径（仅当 --tokenizer=bpe 时使用）"
+    )
+    parser.add_argument(
+        "--bpe_vocab_size",
+        type=int,
+        default=500,
+        help="BPE 词表大小（如果分词器不存在则训练新的）"
     )
     
     # 模型参数
@@ -115,22 +142,55 @@ def main():
     names = load_names_from_file(str(data_path))
     print(f"人名数量: {len(names)}")
     
-    # 构建词表
-    vocab = Vocabulary()
-    vocab.build_from_texts(names)
-    print(f"词表大小: {len(vocab)}")
+    # 构建或加载分词器
+    print(f"\n分词器类型: {args.tokenizer}")
+    
+    if args.tokenizer == "char":
+        # 字符级分词
+        tokenizer = Vocabulary()
+        tokenizer.build_from_texts(names)
+        print(f"词表大小: {len(tokenizer)}")
+        tokenizer_type = "char"
+    elif args.tokenizer == "bpe":
+        # BPE 分词
+        bpe_path = project_root / args.bpe_tokenizer_path
+        
+        if bpe_path.exists():
+            print(f"加载 BPE 分词器: {bpe_path}")
+            tokenizer = BPETokenizer.load(str(bpe_path))
+        else:
+            print(f"BPE 分词器不存在，训练新的分词器...")
+            tokenizer = BPETokenizer()
+            tokenizer.train_from_file(
+                str(data_path),
+                vocab_size=args.bpe_vocab_size,
+                show_progress=True
+            )
+            # 保存分词器
+            bpe_path.parent.mkdir(parents=True, exist_ok=True)
+            tokenizer.save(str(bpe_path))
+            print(f"BPE 分词器已保存到: {bpe_path}")
+        
+        print(f"BPE 词表大小: {tokenizer.get_vocab_size()}")
+        tokenizer_type = "bpe"
+    else:
+        raise ValueError(f"不支持的分词器类型: {args.tokenizer}")
+    
+    # 统一接口：获取词表大小和 pad_idx
+    vocab_size = len(tokenizer) if args.tokenizer == "char" else tokenizer.get_vocab_size()
+    pad_idx = tokenizer.pad_idx
     
     # 创建模型配置
     model_config = ModelConfig(
         model_type="gpt",
-        vocab_size=len(vocab),
+        vocab_size=vocab_size,
         d_model=args.d_model,
         num_heads=args.num_heads,
         num_layers=args.num_layers,
         d_ff=args.d_ff,
         max_len=args.max_len,
         dropout=args.dropout,
-        pad_idx=vocab.pad_idx,
+        pad_idx=pad_idx,
     )
     
     # 创建训练配置
@@ -158,7 +218,7 @@ def main():
     # 创建数据加载器
     train_loader, val_loader = create_data_loaders(
         names=names,
-        vocab=vocab,
+        tokenizer=tokenizer,
         batch_size=train_config.batch_size,
         train_ratio=train_config.train_ratio,
         max_length=model_config.max_len,
@@ -187,7 +247,7 @@ def main():
         model=model,
         train_config=train_config,
         model_config=model_config,
-        vocab=vocab,
+        vocab=tokenizer,  # 统一使用 tokenizer（兼容 Vocabulary 和 BPETokenizer）
     )
     
     # 开始训练
