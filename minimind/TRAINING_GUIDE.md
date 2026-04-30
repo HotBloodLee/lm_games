@@ -559,7 +559,90 @@ HF_ENDPOINT=https://hf-mirror.com lm_eval \
   --trust_remote_code
 ```
 
-### 5.4 参考基准分数
+### 5.4 离线评测数据下载（推荐）
+
+由于 `lm_eval` 默认从 HuggingFace 在线下载评测数据集，国内网络可能导致卡住。推荐**提前将数据集下载到本地指定目录**，之后所有评测均离线运行。
+
+#### 方法一：使用 download_eval_data.py 脚本（推荐）
+
+项目已提供一键下载脚本 `scripts/download_eval_data.py`：
+
+```bash
+# 下载全部评测数据集到 ./eval_data/ 目录（使用镜像加速）
+python scripts/download_eval_data.py --mirror
+
+# 下载到指定目录
+python scripts/download_eval_data.py --save_dir /data/eval_datasets --mirror
+
+# 只下载中文数据集
+python scripts/download_eval_data.py --tasks ceval,cmmlu --mirror
+
+# 只下载英文数据集
+python scripts/download_eval_data.py --tasks arc_easy,piqa,openbookqa,hellaswag,social_iqa --mirror
+```
+
+**脚本参数：**
+
+| 参数 | 说明 |
+|---|---|
+| `--save_dir` | 数据集保存目录（默认: `./eval_data`） |
+| `--tasks` | 要下载的数据集，逗号分隔（默认: 全部 7 个） |
+| `--mirror` | 使用 HuggingFace 镜像 `hf-mirror.com` 加速（国内推荐） |
+
+支持的数据集名称：`ceval`, `cmmlu`, `arc_easy`, `piqa`, `openbookqa`, `hellaswag`, `social_iqa`
+
+#### 方法二：使用 huggingface-cli 下载
+
+```bash
+pip install -U huggingface_hub
+export HF_ENDPOINT=https://hf-mirror.com
+
+# 逐个下载到本地
+huggingface-cli download --repo-type dataset ceval/ceval-exam --local-dir ./eval_data/ceval
+huggingface-cli download --repo-type dataset haonan-li/cmmlu --local-dir ./eval_data/cmmlu
+huggingface-cli download --repo-type dataset allenai/ai2_arc --local-dir ./eval_data/ai2_arc
+huggingface-cli download --repo-type dataset ybisk/piqa --local-dir ./eval_data/piqa
+huggingface-cli download --repo-type dataset allenai/openbookqa --local-dir ./eval_data/openbookqa
+huggingface-cli download --repo-type dataset Rowan/hellaswag --local-dir ./eval_data/hellaswag
+huggingface-cli download --repo-type dataset allenai/social_i_qa --local-dir ./eval_data/social_iqa
+```
+
+#### 离线评测命令
+
+数据下载完成后，通过环境变量指定缓存目录并启用离线模式：
+
+```bash
+# 设置环境变量（指向你的数据目录）
+export HF_DATASETS_CACHE=./eval_data
+export HF_DATASETS_OFFLINE=1
+export HF_HUB_OFFLINE=1
+
+# 评测 SFT 模型（离线）
+lm_eval \
+  --model hf \
+  --model_args pretrained="./minimind-3",dtype=auto \
+  --tasks "ceval-valid,cmmlu,arc_easy,piqa,openbookqa,hellaswag,social_iqa" \
+  --batch_size auto \
+  --device cuda:0 \
+  --trust_remote_code \
+  --apply_chat_template
+
+# 评测 pretrain 基座模型（离线）
+lm_eval \
+  --model hf \
+  --model_args pretrained="./minimind-3-pretrain",dtype=auto \
+  --tasks "ceval-valid,cmmlu,arc_easy,piqa,openbookqa,hellaswag,social_iqa" \
+  --batch_size auto \
+  --device cuda:0 \
+  --trust_remote_code
+```
+
+> **提示：**
+> - `--batch_size auto` 会自动探测最大可用 batch size，推荐替代固定值
+> - 设置 `HF_DATASETS_OFFLINE=1` 后，若缓存中缺少数据集会直接报错，不会卡在网络请求
+> - 数据目录可以拷贝到其他机器复用，无需重复下载
+
+### 5.5 参考基准分数
 
 | 模型 | 参数量 | zh (ceval / cmmlu) | en (arc / piqa / obqa / hellaswag / siqa) |
 |---|---|---|---|
